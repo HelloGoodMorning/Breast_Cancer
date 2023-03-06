@@ -1,0 +1,147 @@
+---
+title: "Breast Cancer Analysis"
+output:
+  html_document:
+    theme: cerulean
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(corrplot)
+library(s20x)
+library(MASS)
+library(mgcv)
+library(MuMIn)
+library(ggeffects)
+```
+
+```{r}
+dataR2 <- read_excel("dataR2.xlsx", 
+                     col_types = c("numeric", "numeric", "numeric", 
+                                   "numeric", "numeric", "numeric", 
+                                   "numeric", "numeric", "numeric", "text"))
+dataR2[, ncol(dataR2)] <-sapply(dataR2[, ncol(dataR2)],as.numeric)
+dataR2$Classification[dataR2$Classification == 1] <- 0
+dataR2$Classification[dataR2$Classification == 2] <- 1
+dataR2$Classification_label <- factor(dataR2$Classification, labels = c("control", "cancer"))
+
+summary(dataR2$Classification_label)
+```
+
+
+```{r}
+par(mfrow=c(3,3))
+boxplot(Age ~ Classification_label, data = dataR2)
+boxplot(BMI ~ Classification_label, data = dataR2)
+boxplot(Glucose ~ Classification_label, data = dataR2)
+boxplot(Insulin ~ Classification_label, data = dataR2)
+boxplot(HOMA ~ Classification_label, data = dataR2)
+boxplot(Leptin ~ Classification_label, data = dataR2)
+boxplot(Adiponectin ~ Classification_label, data = dataR2)
+boxplot(Resistin ~ Classification_label, data = dataR2)
+boxplot(MCP.1 ~ Classification_label, data = dataR2)
+
+#Age
+summaryStats(dataR2$Age, dataR2$Classification_label)
+#BMI
+summaryStats(dataR2$BMI, dataR2$Classification_label)
+#Glucose
+summaryStats(dataR2$Glucose, dataR2$Classification_label)
+#Insulin
+summaryStats(dataR2$Insulin, dataR2$Classification_label)
+#HOMA
+summaryStats(dataR2$HOMA, dataR2$Classification_label)
+#Leptin
+summaryStats(dataR2$Leptin, dataR2$Classification_label)
+#Adiponectin
+summaryStats(dataR2$Adiponectin, dataR2$Classification_label)
+#Resistin
+summaryStats(dataR2$Resistin, dataR2$Classification_label)
+#MCP.1
+summaryStats(dataR2$MCP.1, dataR2$Classification_label)
+
+```
+
+# Initial Comments
+
+The data set contains various clinical measurements from a sample of 116 women. Of those 116 women, 64 had breast cancer and 52 were healthy volunteers to act as a control group.
+
+Looking at box plots there are some noticeable differences between the breast cancer group and the control group. The median age for the control group is 65 whereas the median age for the breast cancer group is 53. For Glucose, Insulin, HOMA and Resistin the spread is centered higher for the breast cancer group. A few of the plots show significant skewness and have outliers which will likely cause issues fitting the logistic model if ignored.
+
+# Correlation Plot
+
+```{r}
+par(mfrow=c(1,1))
+corr_mat <- cor(dataR2[,1:10])
+corrplot(corr_mat, method ="color", addCoef.col = 'grey30',col = COL2('PiYG'), tl.col = 'grey30',
+         type = "lower", cl.ratio = 0.2)
+
+```
+
+Two of the covariate pairs have high correlations, HOMA & Insulin (r = 0.93) and HOMA & Glucose (r = 0.7). This an issue as one of the logistic regression assumptions is little/no multicollinearity among independent variables. The near zero correlations give us an indication of which variable pairs will not be of any use, as they will increase the degrees of freedom without contributing much to the model.
+
+# Modelling Data
+
+```{r}
+#Fitting a GAM model
+bc_gam_fit <- gam(Classification ~ s(Age) + s(BMI) + s(Glucose) +s(Insulin) + s(HOMA) + s(Leptin) +s(Adiponectin) + s(Resistin) +s(MCP.1), family = "binomial", data = dataR2)
+par(mfrow=c(3,3))
+plot(bc_gam_fit)
+```
+
+Firstly I used GAM plots to detect any non linear relationships. All variables look relatively linear, so we don't need to fit any non linear terms. The linearity logistic regression assumption is also met.
+
+```{r}
+#Full model
+bc_fit_1 <- glm(Classification ~ Age + BMI + log(Glucose) +log(Insulin)+ log(HOMA) + Leptin + log(Adiponectin)+log(Resistin) +MCP.1, family = binomial(link = "logit"), data = dataR2)
+
+
+options(na.action = "na.fail")
+all.fits <- dredge(bc_fit_1)
+head(all.fits)
+
+```
+
+
+Here I fit the full model and logged transformed some of the independent variables as they were noticeably skewed. Then I used the dredge function to determine the most suitable models, using AICc as the metric of comparison. I will use the first ranked model, my main criteria was to pick a high ranked model that did use either of the covariate pairs with high correlations as mentioned before. This model uses Age, BMI and logged Glucose and logged Resistin.
+
+
+```{r}
+par(mfrow=c(1,1))
+bc_fit_top <-get.models(all.fits, 1)[[1]]
+plot(bc_fit_top)
+summary(bc_fit_top)
+1-pchisq(deviance(bc_fit_top),df.residual(bc_fit_top))
+
+```
+
+The p-value is 0.474, so we have no evidence to suggest a lack of fit.
+
+```{r}
+#Looking at effects
+ggpredict(bc_fit_top,"Age [all]")
+ggpredict(bc_fit_top,"BMI [all]")
+ggpredict(bc_fit_top,"Glucose [all]")
+ggpredict(bc_fit_top,"Resistin [all]")
+
+plot(ggpredict(bc_fit_top,"Age [all]"))
+plot(ggpredict(bc_fit_top,"BMI [all]"))
+plot(ggpredict(bc_fit_top,"Glucose [all]"))
+plot(ggpredict(bc_fit_top,"Resistin [all]"))
+
+#Marginal effects 
+plot(ggpredict(bc_fit_top,c("BMI [all]","Glucose","Resistin", "Age")))
+plot(ggpredict(bc_fit_top,c("Glucose [all]","BMI","Resistin", "Age")))
+plot(ggpredict(bc_fit_top,c("Resistin [all]","Glucose","BMI", "Age")))
+plot(ggpredict(bc_fit_top,c("Age [all]","Glucose","Resistin", "BMI")))
+
+exp(confint(bc_fit_top))
+exp(coef(bc_fit_top))
+
+```
+
+For every one year increase in age the odds of breast cancer are multiplied by 0.977 and for every one unit increase in BMI the odds of breast cancer are multiplied by 0.854. This is consistent with the decreasing trend in the Age and BMI plots. For every one unit increase in logged Glucose levels the odds of breast cancer are multiplied by 21269 and for every one unit increase in logged Resistin levels the odds of breast cancer are multiplied by 4.16. In general it looks like higher Glucose and Resistin levels are associated with higher odds of breast cancer. I was suprised to see that higher BMI appears to be associated with lower odds of having breast cancer.
